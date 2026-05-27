@@ -19,6 +19,7 @@ export type Upload = {
   text_length: number;
   status: "processing" | "ready" | "failed";
   error: string | null;
+  storage_path: string | null;
   created_at: string;
 };
 

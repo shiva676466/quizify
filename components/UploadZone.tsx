@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { FileUp, Loader2 } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
-// Vercel Hobby caps serverless request bodies at 4.5 MB. We use 4 MB to give
-// a small margin (multipart form overhead + cookies).
-const MAX_BYTES = 4 * 1024 * 1024;
+// PDFs are uploaded straight to Supabase Storage from the browser, so this
+// limit is no longer constrained by Vercel's serverless body cap.
+const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export function UploadZone() {
   const router = useRouter();
@@ -34,18 +35,42 @@ export function UploadZone() {
       }
 
       setBusy(true);
-      setStage("Uploading…");
-      const fd = new FormData();
-      fd.append("file", file);
-
       try {
-        setStage("Extracting text & generating quiz…");
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          toast.error("Please sign in again.");
+          return;
+        }
 
-        // The server may not return JSON (e.g. Vercel edge sends plain text
-        // "Request Entity Too Large" before the function runs). Read as text
-        // first and JSON-parse defensively so we never throw a confusing
-        // "Unexpected token" error in the UI.
+        // 1. Upload PDF directly to Supabase Storage.
+        setStage("Uploading PDF…");
+        const objectId = crypto.randomUUID();
+        const storagePath = `${user.id}/${objectId}.pdf`;
+        const { error: storageErr } = await supabase.storage
+          .from("pdfs")
+          .upload(storagePath, file, {
+            contentType: "application/pdf",
+            upsert: false,
+          });
+        if (storageErr) {
+          throw new Error(`Upload to storage failed: ${storageErr.message}`);
+        }
+
+        // 2. Tell the API to process it.
+        setStage("Extracting text & generating quiz…");
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: file.name,
+            size: file.size,
+            storagePath,
+          }),
+        });
+
         const raw = await res.text();
         let data: any = {};
         try {
@@ -55,12 +80,9 @@ export function UploadZone() {
         }
 
         if (!res.ok) {
-          if (res.status === 413) {
-            throw new Error(
-              `File too large for the server (${formatBytes(file.size)}). Try a smaller PDF.`
-            );
-          }
-          throw new Error(data?.error ?? `Upload failed (HTTP ${res.status})`);
+          // Clean up the orphaned storage object so it doesn't linger.
+          supabase.storage.from("pdfs").remove([storagePath]).catch(() => {});
+          throw new Error(data?.error ?? `Processing failed (HTTP ${res.status})`);
         }
 
         toast.success("Quiz ready!");

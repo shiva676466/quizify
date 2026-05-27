@@ -7,9 +7,13 @@ import { rateLimit, getClientIp } from "@/lib/ratelimit";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Vercel Hobby caps function request bodies at 4.5 MB; we use 4 MB to leave
-// room for multipart overhead. Clients should refuse oversize uploads first.
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+type Body = {
+  filename?: string;
+  size?: number;
+  storagePath?: string;
+};
 
 export async function POST(req: Request) {
   try {
@@ -31,30 +35,40 @@ export async function POST(req: Request) {
       );
     }
 
-    const form = await req.formData();
-    const file = form.get("file");
+    const body = (await req.json().catch(() => ({}))) as Body;
+    const filename = (body.filename ?? "").toString().slice(0, 255);
+    const size = Number(body.size ?? 0);
+    const storagePath = (body.storagePath ?? "").toString();
 
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    if (!filename || !storagePath) {
+      return NextResponse.json(
+        { error: "filename and storagePath are required" },
+        { status: 400 }
+      );
     }
-    if (file.type !== "application/pdf") {
-      return NextResponse.json({ error: "Only PDF files are allowed" }, { status: 400 });
+    if (!storagePath.startsWith(`${user.id}/`)) {
+      return NextResponse.json(
+        { error: "Storage path does not belong to you." },
+        { status: 403 }
+      );
     }
-    if (file.size > MAX_FILE_BYTES) {
-      return NextResponse.json({ error: "File exceeds 10MB limit" }, { status: 400 });
+    if (size > MAX_FILE_BYTES) {
+      return NextResponse.json(
+        { error: `File exceeds ${MAX_FILE_BYTES / 1024 / 1024}MB limit` },
+        { status: 400 }
+      );
     }
-
-    const buffer = Buffer.from(await file.arrayBuffer());
 
     // 1. Create upload row (status=processing)
     const { data: upload, error: insertErr } = await supabase
       .from("uploads")
       .insert({
         user_id: user.id,
-        filename: file.name,
-        size_bytes: file.size,
+        filename,
+        size_bytes: size,
         text_length: 0,
         status: "processing",
+        storage_path: storagePath,
       })
       .select("*")
       .single();
@@ -67,17 +81,26 @@ export async function POST(req: Request) {
     }
 
     try {
-      // 2. Extract text
+      // 2. Download the PDF from Supabase Storage.
+      const { data: blob, error: dlErr } = await supabase.storage
+        .from("pdfs")
+        .download(storagePath);
+      if (dlErr || !blob) {
+        throw new Error(dlErr?.message ?? "Could not read uploaded PDF.");
+      }
+      const buffer = Buffer.from(await blob.arrayBuffer());
+
+      // 3. Extract text.
       const text = await extractPdfText(buffer);
       if (!text || text.length < 50) {
         throw new Error("Could not extract enough text from PDF.");
       }
 
-      // 3. Generate via Gemini
+      // 4. Generate via LLM.
       const { summary, mcqs, flashcards } = await generateFromNotes(text);
       if (!mcqs.length) throw new Error("AI did not return any questions.");
 
-      // 4. Persist quiz + flashcards
+      // 5. Persist quiz + flashcards.
       const { error: quizErr } = await supabase.from("quizzes").insert({
         upload_id: upload.id,
         user_id: user.id,
@@ -97,7 +120,7 @@ export async function POST(req: Request) {
         if (fcErr) throw new Error(fcErr.message);
       }
 
-      // 5. Mark upload ready
+      // 6. Mark upload ready.
       await supabase
         .from("uploads")
         .update({ status: "ready", text_length: text.length })

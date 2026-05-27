@@ -18,6 +18,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "uploadId required" }, { status: 400 });
   }
 
+  // Read storage_path first so we can clean up the PDF from Storage.
+  const { data: existing } = await supabase
+    .from("uploads")
+    .select("storage_path")
+    .eq("id", uploadId)
+    .eq("user_id", user.id)
+    .single();
+
   // RLS ensures only the owner can delete. Cascade removes quizzes + flashcards.
   const { error } = await supabase
     .from("uploads")
@@ -27,6 +35,11 @@ export async function POST(req: Request) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  if (existing?.storage_path) {
+    // Best-effort: ignore failure so a missing object doesn't block the delete.
+    await supabase.storage.from("pdfs").remove([existing.storage_path]).catch(() => {});
   }
 
   return NextResponse.json({ ok: true });

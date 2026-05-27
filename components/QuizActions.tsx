@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, Download, FileUp, Plus } from "lucide-react";
+import { Copy, Download, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { MCQ, Flashcard } from "@/types";
 import { exportQuizPdf } from "@/lib/export";
@@ -23,7 +23,6 @@ export function QuizActions({
   filename,
 }: Props) {
   const router = useRouter();
-  const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
   const onCopy = async () => {
@@ -63,22 +62,14 @@ export function QuizActions({
     }
   };
 
-  const onGenerateMore = async (file?: File) => {
+  const onGenerateMore = async () => {
     setBusy(true);
     try {
-      let res: Response;
-      if (file) {
-        const fd = new FormData();
-        fd.append("uploadId", uploadId);
-        fd.append("file", file);
-        res = await fetch("/api/generate-more", { method: "POST", body: fd });
-      } else {
-        res = await fetch("/api/generate-more", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uploadId }),
-        });
-      }
+      const res = await fetch("/api/generate-more", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId }),
+      });
 
       const raw = await res.text();
       let data: any = {};
@@ -88,24 +79,12 @@ export function QuizActions({
         data = { error: raw.slice(0, 300) || `HTTP ${res.status}` };
       }
       if (!res.ok) {
-        if (res.status === 413) {
-          throw new Error("File too large for the server. Try a smaller PDF.");
-        }
         throw new Error(data?.error ?? `Failed (HTTP ${res.status})`);
       }
       toast.success(`Added ${data.added} new questions`);
       router.refresh();
     } catch (err: any) {
-      // If we get the "notes text required" error, prompt for re-upload.
-      if (
-        err?.message?.toLowerCase().includes("notes text required") ||
-        err?.message?.toLowerCase().includes("text required")
-      ) {
-        toast.message("Please re-upload the original PDF to generate more.");
-        fileRef.current?.click();
-      } else {
-        toast.error(err?.message ?? "Failed");
-      }
+      toast.error(err?.message ?? "Failed");
     } finally {
       setBusy(false);
     }
@@ -114,7 +93,7 @@ export function QuizActions({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
-        onClick={() => onGenerateMore()}
+        onClick={onGenerateMore}
         disabled={busy}
         className="btn-primary"
       >
@@ -132,24 +111,6 @@ export function QuizActions({
 
       <button onClick={onExport} className="btn-outline">
         <Download className="h-4 w-4" /> Export PDF
-      </button>
-
-      <input
-        ref={fileRef}
-        type="file"
-        accept="application/pdf"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onGenerateMore(f);
-        }}
-      />
-      <button
-        onClick={() => fileRef.current?.click()}
-        className="btn-ghost"
-        title="Re-upload PDF (used when server doesn't have the original text)"
-      >
-        <FileUp className="h-4 w-4" /> Re-upload source
       </button>
     </div>
   );
