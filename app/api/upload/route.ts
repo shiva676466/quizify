@@ -7,7 +7,9 @@ import { rateLimit, getClientIp } from "@/lib/ratelimit";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+// Vercel Hobby caps function request bodies at 4.5 MB; we use 4 MB to leave
+// room for multipart overhead. Clients should refuse oversize uploads first.
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 export async function POST(req: Request) {
   try {

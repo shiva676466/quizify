@@ -80,8 +80,19 @@ export function QuizActions({
         });
       }
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Failed");
+      const raw = await res.text();
+      let data: any = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { error: raw.slice(0, 300) || `HTTP ${res.status}` };
+      }
+      if (!res.ok) {
+        if (res.status === 413) {
+          throw new Error("File too large for the server. Try a smaller PDF.");
+        }
+        throw new Error(data?.error ?? `Failed (HTTP ${res.status})`);
+      }
       toast.success(`Added ${data.added} new questions`);
       router.refresh();
     } catch (err: any) {
