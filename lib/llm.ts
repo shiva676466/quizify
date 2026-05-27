@@ -179,6 +179,52 @@ ${trim(text)}
   };
 }
 
+// Generate just the 10 MCQs from notes. Smaller prompt = fits in timeout.
+export async function generateMcqs(text: string): Promise<MCQ[]> {
+  const prompt = `From the study notes below, write exactly 10 multiple-choice questions covering the most important concepts.
+
+Return STRICT JSON: { "mcqs": [...] } where each item is:
+{ "question": string, "options": [s,s,s,s], "answer_index": 0..3, "explanation": string }
+
+Rules:
+- Each question has exactly 4 options.
+- answer_index is 0..3.
+- Do not repeat or paraphrase questions.
+- Keep options plausible.
+- Return ONLY the JSON object.
+
+NOTES:
+"""
+${trim(text)}
+"""`;
+
+  const raw = await chat(prompt, { temperature: 0.5 });
+  const parsed = tryParseJson<{ mcqs?: MCQ[] } | MCQ[]>(raw);
+  const arr = Array.isArray(parsed) ? parsed : (parsed?.mcqs ?? []);
+  return sanitizeMcqs(arr);
+}
+
+// Generate 12 flashcards from notes.
+export async function generateFlashcards(text: string): Promise<Flashcard[]> {
+  const prompt = `From the study notes below, write 12 concise flashcards.
+Front = a term or short question. Back = the definition or short answer.
+
+Return STRICT JSON: { "flashcards": [...] } where each item is:
+{ "front": string, "back": string }
+
+Return ONLY the JSON object.
+
+NOTES:
+"""
+${trim(text)}
+"""`;
+
+  const raw = await chat(prompt, { temperature: 0.4 });
+  const parsed = tryParseJson<{ flashcards?: Flashcard[] } | Flashcard[]>(raw);
+  const arr = Array.isArray(parsed) ? parsed : (parsed?.flashcards ?? []);
+  return sanitizeFlashcards(arr);
+}
+
 // Regenerate just the summary in a given mode. Used by /api/regenerate-summary
 // so the user can switch styles without re-running MCQ/flashcard generation.
 export async function generateSummary(

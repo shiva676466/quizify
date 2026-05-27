@@ -9,9 +9,31 @@ import { createClient } from "@/lib/supabase/client";
 import { SummaryModePicker } from "./SummaryModePicker";
 import type { SummaryMode } from "@/types";
 
-// PDFs are uploaded straight to Supabase Storage from the browser, so this
-// limit is no longer constrained by Vercel's serverless body cap.
+// PDFs are uploaded straight to Supabase Storage so this limit isn't
+// constrained by Vercel's serverless body cap.
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+// Parse a fetch response defensively — Vercel edge can return non-JSON
+// (HTML error pages, plain text "Request Entity Too Large", etc.).
+async function readJson(res: Response): Promise<{ ok: boolean; data: any; raw: string }> {
+  const raw = await res.text();
+  try {
+    return { ok: res.ok, data: raw ? JSON.parse(raw) : {}, raw };
+  } catch {
+    return { ok: res.ok, data: { error: raw.slice(0, 300) || `HTTP ${res.status}` }, raw };
+  }
+}
+
+async function post(path: string, body: Record<string, unknown>) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const { ok, data } = await readJson(res);
+  if (!ok) throw new Error(data?.error ?? `${path} failed (HTTP ${res.status})`);
+  return data;
+}
 
 export function UploadZone() {
   const router = useRouter();
@@ -38,8 +60,11 @@ export function UploadZone() {
       }
 
       setBusy(true);
+      const supabase = createClient();
+      const objectId = crypto.randomUUID();
+      let storagePath = "";
+
       try {
-        const supabase = createClient();
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -48,10 +73,9 @@ export function UploadZone() {
           return;
         }
 
-        // 1. Upload PDF directly to Supabase Storage.
+        // 1) Upload PDF straight to Supabase Storage.
         setStage("Uploading PDF…");
-        const objectId = crypto.randomUUID();
-        const storagePath = `${user.id}/${objectId}.pdf`;
+        storagePath = `${user.id}/${objectId}.pdf`;
         const { error: storageErr } = await supabase.storage
           .from("pdfs")
           .upload(storagePath, file, {
@@ -62,41 +86,40 @@ export function UploadZone() {
           throw new Error(`Upload to storage failed: ${storageErr.message}`);
         }
 
-        // 2. Tell the API to process it.
-        setStage(
-          mode === "exam"
-            ? "Extracting text & building exam study sheet…"
-            : "Extracting text & generating quiz…"
-        );
-        const res = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: file.name,
-            size: file.size,
-            storagePath,
-            summaryMode: mode,
-          }),
+        // 2) /api/upload — extract text, return uploadId. (No LLM.)
+        setStage("Extracting text…");
+        const { uploadId } = await post("/api/upload", {
+          filename: file.name,
+          size: file.size,
+          storagePath,
+          summaryMode: mode,
         });
 
-        const raw = await res.text();
-        let data: any = {};
-        try {
-          data = raw ? JSON.parse(raw) : {};
-        } catch {
-          data = { error: raw.slice(0, 300) || `HTTP ${res.status}` };
-        }
+        // 3) /api/process-summary — generate the summary in the chosen style.
+        setStage(
+          mode === "exam"
+            ? "Building exam study sheet…"
+            : "Writing summary…"
+        );
+        await post("/api/process-summary", { uploadId });
 
-        if (!res.ok) {
-          // Clean up the orphaned storage object so it doesn't linger.
-          supabase.storage.from("pdfs").remove([storagePath]).catch(() => {});
-          throw new Error(data?.error ?? `Processing failed (HTTP ${res.status})`);
-        }
+        // 4) /api/process-mcqs — 10 MCQs.
+        setStage("Generating multiple-choice questions…");
+        await post("/api/process-mcqs", { uploadId });
+
+        // 5) /api/process-flashcards — 12 flashcards + mark ready.
+        setStage("Making flashcards…");
+        await post("/api/process-flashcards", { uploadId });
 
         toast.success("Quiz ready!");
-        router.push(`/quiz/${data.uploadId}`);
+        router.push(`/quiz/${uploadId}`);
         router.refresh();
       } catch (err: any) {
+        // Best-effort: orphaned storage object cleanup if the chain failed
+        // before we even created an upload row.
+        if (storagePath) {
+          supabase.storage.from("pdfs").remove([storagePath]).catch(() => {});
+        }
         toast.error(err?.message ?? "Upload failed");
       } finally {
         setBusy(false);
@@ -151,7 +174,7 @@ export function UploadZone() {
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
           {busy
-            ? "This usually takes 10–30 seconds."
+            ? "This usually takes 30–60 seconds across four steps."
             : `Drag & drop or click to choose a file. Max ${formatBytes(MAX_BYTES)}.`}
         </p>
 

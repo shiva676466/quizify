@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractPdfText } from "@/lib/pdf";
-import { generateFromNotes } from "@/lib/llm";
 import { rateLimit, getClientIp } from "@/lib/ratelimit";
 import type { SummaryMode } from "@/types";
 
@@ -17,18 +16,19 @@ type Body = {
   summaryMode?: SummaryMode;
 };
 
+// Step 1 of 4: download the PDF from Supabase Storage, extract text, persist
+// it on the upload row. NO LLM call — keeps this endpoint fast and within the
+// platform timeout regardless of plan.
 export async function POST(req: Request) {
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Per-user + per-IP rate limit (5 uploads per minute)
     const rl = rateLimit(`upload:${user.id}:${getClientIp(req)}`, 5, 60_000);
     if (!rl.success) {
       return NextResponse.json(
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1. Create upload row (status=processing)
+    // Insert the upload row up front.
     const { data: upload, error: insertErr } = await supabase
       .from("uploads")
       .insert({
@@ -76,7 +76,6 @@ export async function POST(req: Request) {
       })
       .select("*")
       .single();
-
     if (insertErr || !upload) {
       return NextResponse.json(
         { error: insertErr?.message ?? "Failed to create upload" },
@@ -85,7 +84,7 @@ export async function POST(req: Request) {
     }
 
     try {
-      // 2. Download the PDF from Supabase Storage.
+      // Download + extract.
       const { data: blob, error: dlErr } = await supabase.storage
         .from("pdfs")
         .download(storagePath);
@@ -93,43 +92,27 @@ export async function POST(req: Request) {
         throw new Error(dlErr?.message ?? "Could not read uploaded PDF.");
       }
       const buffer = Buffer.from(await blob.arrayBuffer());
-
-      // 3. Extract text.
       const text = await extractPdfText(buffer);
       if (!text || text.length < 50) {
         throw new Error("Could not extract enough text from PDF.");
       }
 
-      // 4. Generate via LLM.
-      const { summary, mcqs, flashcards } = await generateFromNotes(text, summaryMode);
-      if (!mcqs.length) throw new Error("AI did not return any questions.");
-
-      // 5. Persist quiz + flashcards.
-      const { error: quizErr } = await supabase.from("quizzes").insert({
-        upload_id: upload.id,
-        user_id: user.id,
-        summary,
-        summary_mode: summaryMode,
-        mcqs,
-      });
-      if (quizErr) throw new Error(quizErr.message);
-
-      if (flashcards.length) {
-        const rows = flashcards.map((f) => ({
-          upload_id: upload.id,
-          user_id: user.id,
-          front: f.front,
-          back: f.back,
-        }));
-        const { error: fcErr } = await supabase.from("flashcards").insert(rows);
-        if (fcErr) throw new Error(fcErr.message);
-      }
-
-      // 6. Mark upload ready.
+      // Persist text so the subsequent process-* endpoints can re-use it
+      // without re-downloading.
       await supabase
         .from("uploads")
-        .update({ status: "ready", text_length: text.length })
+        .update({ text_length: text.length, notes_text: text })
         .eq("id", upload.id);
+
+      // Create a placeholder quiz row carrying the chosen summary mode.
+      // Each process step will fill in its piece.
+      await supabase.from("quizzes").insert({
+        upload_id: upload.id,
+        user_id: user.id,
+        summary: "",
+        summary_mode: summaryMode,
+        mcqs: [],
+      });
 
       return NextResponse.json({ uploadId: upload.id });
     } catch (err: any) {
