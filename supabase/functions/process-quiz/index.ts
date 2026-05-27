@@ -11,8 +11,9 @@
 //
 // SUPABASE_URL and SUPABASE_ANON_KEY are injected automatically.
 
+declare const Deno: any;
 // deno-lint-ignore-file no-explicit-any
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 type SummaryMode = "general" | "exam";
 
@@ -226,7 +227,7 @@ function json(status: number, body: unknown) {
   });
 }
 
-Deno.serve(async (req) => {
+Deno.serve(async (req: any) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
