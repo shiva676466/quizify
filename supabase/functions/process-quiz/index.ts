@@ -57,18 +57,46 @@ function stripJsonFences(s: string) {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 }
 
+// Some free models emit "double-escaped" JSON — literal \n, \", \\ outside
+// any string. Decode the escape sequences and try again.
+function unescapeJsonLiterals(s: string): string {
+  return s
+    .replace(/\\\\/g, "")
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(//g, "\\");
+}
+
 function tryParseJson<T>(raw: string): T {
   const cleaned = stripJsonFences(raw);
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    const first = cleaned.search(/[\[{]/);
-    const last = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
-    if (first >= 0 && last > first) {
-      return JSON.parse(cleaned.slice(first, last + 1)) as T;
-    }
-    throw new Error("Failed to parse LLM JSON output");
+  const attempts: string[] = [cleaned];
+
+  const first = cleaned.search(/[\[{]/);
+  const last = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (first >= 0 && last > first) {
+    attempts.push(cleaned.slice(first, last + 1));
   }
+
+  if (/\\[n"\\trbf]/.test(cleaned)) {
+    const unescaped = unescapeJsonLiterals(cleaned);
+    attempts.push(unescaped);
+    const uFirst = unescaped.search(/[\[{]/);
+    const uLast = Math.max(unescaped.lastIndexOf("}"), unescaped.lastIndexOf("]"));
+    if (uFirst >= 0 && uLast > uFirst) {
+      attempts.push(unescaped.slice(uFirst, uLast + 1));
+    }
+  }
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // try the next candidate
+    }
+  }
+  throw new Error("Failed to parse LLM JSON output");
 }
 
 async function chat(prompt: string, temperature = 0.4): Promise<string> {
