@@ -1,3 +1,5 @@
+export type SummaryMode = "general" | "exam";
+
 export type MCQ = {
   question: string;
   options: string[]; // length 4
@@ -28,6 +30,7 @@ export type Quiz = {
   upload_id: string;
   user_id: string;
   summary: string;
+  summary_mode: SummaryMode;
   mcqs: MCQ[];
   created_at: string;
 };

@@ -6,8 +6,9 @@ import { Footer } from "@/components/Footer";
 import { MCQList } from "@/components/MCQList";
 import { FlashcardDeck } from "@/components/FlashcardDeck";
 import { QuizActions } from "@/components/QuizActions";
+import { SummaryModeSwitch } from "@/components/SummaryModeSwitch";
 import { createClient } from "@/lib/supabase/server";
-import type { Flashcard, MCQ } from "@/types";
+import type { Flashcard, MCQ, SummaryMode } from "@/types";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +81,15 @@ export default async function QuizPage({ params }: { params: { id: string } }) {
 
           {/* Summary */}
           <section className="card p-6">
-            <h2 className="text-xl font-semibold">Summary</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-xl font-semibold">Summary</h2>
+              {quiz && (
+                <SummaryModeSwitch
+                  uploadId={upload.id}
+                  current={(quiz.summary_mode as SummaryMode) ?? "general"}
+                />
+              )}
+            </div>
             <p className="mt-3 whitespace-pre-wrap leading-relaxed text-sm sm:text-base">
               {quiz?.summary || "No summary available."}
             </p>

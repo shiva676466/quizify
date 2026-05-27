@@ -1,6 +1,30 @@
 // LLM provider: OpenRouter (OpenAI-compatible Chat Completions API).
 // Free tier, no billing required. Get a key at https://openrouter.ai/keys
-import type { Flashcard, GenerateResult, MCQ } from "@/types";
+import type { Flashcard, GenerateResult, MCQ, SummaryMode } from "@/types";
+
+// Prompt fragment describing the summary style. Used by both
+// generateFromNotes (initial upload) and generateSummary (regenerate).
+const SUMMARY_SPEC: Record<SummaryMode, string> = {
+  general: `A clear, well-structured summary in 250-400 words.
+- Plain paragraphs (no bullet lists, no markdown).
+- Explain key ideas in a flow that a student can read end-to-end.`,
+  exam: `An exam-focused study sheet. 400-600 words. Use this exact layout with the section headings shown:
+
+KEY CONCEPTS
+- 5-8 short bullets, each starting with the term in **bold** followed by a one-line definition.
+
+DEFINITIONS & FORMULAS
+- Bullet list of every important term, formula, equation, date, or named entity from the notes.
+- Format: **Term** — definition / formula.
+
+WORKED EXAMPLES OR SCENARIOS
+- 2-3 short illustrative cases drawn from the notes.
+
+LIKELY EXAM QUESTIONS
+- 5 short bullet points predicting the exact questions a teacher would ask.
+
+Be exhaustive on facts, concise on prose. Use ASCII bullets ("- "). Bold with **double asterisks**.`,
+};
 
 // Free models on OpenRouter — we try them in order on 429 / 5xx so a single
 // upstream provider being rate-limited doesn't kill the request.
@@ -103,13 +127,16 @@ async function chat(prompt: string, opts?: { temperature?: number }): Promise<st
   throw new Error(`OpenRouter: all models failed. ${lastErrors.join(" | ")}`);
 }
 
-export async function generateFromNotes(text: string): Promise<GenerateResult> {
+export async function generateFromNotes(
+  text: string,
+  mode: SummaryMode = "general"
+): Promise<GenerateResult> {
   const prompt = `Given the user's study notes below, produce a JSON object containing:
-1. "summary": a clear, well-structured 250-400 word summary (plain text, paragraphs).
+1. "summary": ${SUMMARY_SPEC[mode]}
 2. "mcqs": exactly 10 multiple-choice questions covering the most important concepts.
 3. "flashcards": 12 concise flashcards (front = term/question, back = definition/answer).
 
-Return STRICT JSON with this exact shape — no prose, no markdown fences:
+Return STRICT JSON with this exact shape — no prose outside the JSON, no markdown fences around the JSON:
 {
   "summary": "string",
   "mcqs": [
@@ -140,6 +167,29 @@ ${trim(text)}
     mcqs: sanitizeMcqs(parsed.mcqs ?? []),
     flashcards: sanitizeFlashcards(parsed.flashcards ?? []),
   };
+}
+
+// Regenerate just the summary in a given mode. Used by /api/regenerate-summary
+// so the user can switch styles without re-running MCQ/flashcard generation.
+export async function generateSummary(
+  text: string,
+  mode: SummaryMode
+): Promise<string> {
+  const prompt = `Produce a summary of the study notes below.
+
+Style: ${SUMMARY_SPEC[mode]}
+
+Return STRICT JSON of the form: { "summary": "string" }
+Return ONLY the JSON object. No prose before or after.
+
+NOTES:
+"""
+${trim(text)}
+"""`;
+
+  const raw = await chat(prompt, { temperature: 0.3 });
+  const parsed = tryParseJson<{ summary?: string }>(raw);
+  return (parsed?.summary ?? "").toString().trim();
 }
 
 export async function generateMoreMcqs(

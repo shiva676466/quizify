@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { extractPdfText } from "@/lib/pdf";
 import { generateFromNotes } from "@/lib/llm";
 import { rateLimit, getClientIp } from "@/lib/ratelimit";
+import type { SummaryMode } from "@/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -13,6 +14,7 @@ type Body = {
   filename?: string;
   size?: number;
   storagePath?: string;
+  summaryMode?: SummaryMode;
 };
 
 export async function POST(req: Request) {
@@ -39,6 +41,8 @@ export async function POST(req: Request) {
     const filename = (body.filename ?? "").toString().slice(0, 255);
     const size = Number(body.size ?? 0);
     const storagePath = (body.storagePath ?? "").toString();
+    const summaryMode: SummaryMode =
+      body.summaryMode === "exam" ? "exam" : "general";
 
     if (!filename || !storagePath) {
       return NextResponse.json(
@@ -97,7 +101,7 @@ export async function POST(req: Request) {
       }
 
       // 4. Generate via LLM.
-      const { summary, mcqs, flashcards } = await generateFromNotes(text);
+      const { summary, mcqs, flashcards } = await generateFromNotes(text, summaryMode);
       if (!mcqs.length) throw new Error("AI did not return any questions.");
 
       // 5. Persist quiz + flashcards.
@@ -105,6 +109,7 @@ export async function POST(req: Request) {
         upload_id: upload.id,
         user_id: user.id,
         summary,
+        summary_mode: summaryMode,
         mcqs,
       });
       if (quizErr) throw new Error(quizErr.message);
