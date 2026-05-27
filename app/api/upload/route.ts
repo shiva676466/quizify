@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractPdfText } from "@/lib/pdf";
-import { generateFromNotes } from "@/lib/gemini";
+import { generateFromNotes } from "@/lib/llm";
 import { rateLimit, getClientIp } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";

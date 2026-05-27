@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { createClient } from "@/lib/supabase/server";
 import {
   ArrowRight,
   BookOpen,
@@ -9,9 +11,24 @@ import {
   Sparkles,
   Zap,
   ShieldCheck,
+  LayoutDashboard,
 } from "lucide-react";
 
-export default function LandingPage() {
+export const dynamic = "force-dynamic";
+
+export default async function LandingPage() {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/signup");
+  }
+
+  const greeting =
+    (user.user_metadata?.full_name as string | undefined) ?? user.email;
+
   return (
     <div className="min-h-dvh flex flex-col">
       <Navbar />
@@ -23,7 +40,7 @@ export default function LandingPage() {
           <div className="mx-auto max-w-5xl px-4 py-20 sm:py-28 text-center animate-fade-in">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Powered by Google Gemini
+              Welcome back{greeting ? `, ${greeting}` : ""}
             </span>
 
             <h1 className="mt-6 text-4xl sm:text-6xl font-bold tracking-tight">
@@ -32,17 +49,17 @@ export default function LandingPage() {
             </h1>
 
             <p className="mx-auto mt-5 max-w-2xl text-base sm:text-lg text-muted-foreground">
-              Quizify reads your lecture notes, generates a clean summary, ten
-              multiple-choice questions, and a deck of flashcards — so you can
-              study smarter, not longer.
+              Drop a PDF on your dashboard and Quizify generates a clean summary,
+              ten multiple-choice questions, and a deck of flashcards.
             </p>
 
             <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
-              <Link href="/signup" className="btn-primary">
-                Get started free <ArrowRight className="h-4 w-4" />
+              <Link href="/dashboard" className="btn-primary">
+                <LayoutDashboard className="h-4 w-4" />
+                Go to dashboard
               </Link>
-              <Link href="/login" className="btn-outline">
-                I already have an account
+              <Link href="/dashboard" className="btn-outline">
+                Upload a new PDF <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
 
@@ -89,7 +106,7 @@ export default function LandingPage() {
             <Feature
               icon={Sparkles}
               title="High-quality output"
-              text="Gemini 1.5 generates accurate, exam-style questions and crisp summaries."
+              text="Open-source LLMs generate accurate, exam-style questions and crisp summaries."
             />
           </div>
         </section>
@@ -109,7 +126,7 @@ export default function LandingPage() {
               {
                 n: "2",
                 t: "AI processes",
-                d: "We extract the text and ask Gemini to summarize & quiz it.",
+                d: "We extract the text and generate a summary, quiz, and deck.",
               },
               {
                 n: "3",
@@ -128,8 +145,8 @@ export default function LandingPage() {
           </div>
 
           <div className="mt-12 text-center">
-            <Link href="/signup" className="btn-primary">
-              Create your free account <ArrowRight className="h-4 w-4" />
+            <Link href="/dashboard" className="btn-primary">
+              Open your dashboard <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
         </section>

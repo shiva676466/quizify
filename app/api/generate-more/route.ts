@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { generateMoreMcqs } from "@/lib/gemini";
+import { generateMoreMcqs } from "@/lib/llm";
 import { rateLimit, getClientIp } from "@/lib/ratelimit";
 import { extractPdfText } from "@/lib/pdf";
 import type { MCQ } from "@/types";
