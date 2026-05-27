@@ -4,26 +4,21 @@ import type { Flashcard, GenerateResult, MCQ, SummaryMode } from "@/types";
 
 // Prompt fragment describing the summary style. Used by both
 // generateFromNotes (initial upload) and generateSummary (regenerate).
+// Kept tight (≤400 words) so generation fits inside Vercel function timeouts.
 const SUMMARY_SPEC: Record<SummaryMode, string> = {
-  general: `A clear, well-structured summary in 250-400 words.
-- Plain paragraphs (no bullet lists, no markdown).
-- Explain key ideas in a flow that a student can read end-to-end.`,
-  exam: `An exam-focused study sheet. 400-600 words. Use this exact layout with the section headings shown:
+  general: `A clear summary in 200-300 words. Plain paragraphs, no bullet lists, no markdown.`,
+  exam: `A tight exam-focused study sheet, 250-350 words total. Use this exact layout:
 
 KEY CONCEPTS
-- 5-8 short bullets, each starting with the term in **bold** followed by a one-line definition.
+- 4-6 bullets. Each starts with the term in **bold** followed by a one-line definition.
 
 DEFINITIONS & FORMULAS
-- Bullet list of every important term, formula, equation, date, or named entity from the notes.
-- Format: **Term** — definition / formula.
-
-WORKED EXAMPLES OR SCENARIOS
-- 2-3 short illustrative cases drawn from the notes.
+- Bullet every important term, formula, equation, date, or name. Format: **Term** — definition.
 
 LIKELY EXAM QUESTIONS
-- 5 short bullet points predicting the exact questions a teacher would ask.
+- 4 bullet points predicting questions a teacher would ask.
 
-Be exhaustive on facts, concise on prose. Use ASCII bullets ("- "). Bold with **double asterisks**.`,
+ASCII bullets ("- ") only. Bold with **double asterisks**. No prose intros.`,
 };
 
 // Free models on OpenRouter — we try them in order on 429 / 5xx so a single
@@ -47,7 +42,9 @@ function getKey() {
   return k;
 }
 
-function trim(text: string, max = 14_000) {
+// Cap input text. Bigger inputs = longer generation latency; we'd rather miss
+// some footnotes than hit a function timeout.
+function trim(text: string, max = 9_000) {
   return text.length > max ? text.slice(0, max) : text;
 }
 
@@ -72,6 +69,10 @@ function tryParseJson<T>(raw: string): T {
   }
 }
 
+// Per-model attempt timeout. Vercel Hobby caps function execution tight, so
+// a slow upstream must fail fast and let us try the next model.
+const PER_ATTEMPT_MS = 20_000;
+
 async function chat(prompt: string, opts?: { temperature?: number }): Promise<string> {
   const referer =
     process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -80,9 +81,12 @@ async function chat(prompt: string, opts?: { temperature?: number }): Promise<st
   const lastErrors: string[] = [];
 
   for (const model of MODELS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PER_ATTEMPT_MS);
     try {
       const res = await fetch(ENDPOINT, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${key}`,
@@ -120,7 +124,13 @@ async function chat(prompt: string, opts?: { temperature?: number }): Promise<st
       const retryable = res.status === 429 || res.status >= 500;
       if (!retryable) break;
     } catch (err: any) {
-      lastErrors.push(`${model}: ${err?.message ?? err}`);
+      const msg =
+        err?.name === "AbortError"
+          ? `timeout after ${PER_ATTEMPT_MS}ms`
+          : (err?.message ?? String(err));
+      lastErrors.push(`${model}: ${msg}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
