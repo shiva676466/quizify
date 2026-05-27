@@ -95,21 +95,27 @@ export function UploadZone() {
           summaryMode: mode,
         });
 
-        // 3) /api/process-summary — generate the summary in the chosen style.
+        // 3) Supabase Edge Function — full LLM pipeline in one ~60s call.
+        // Runs on Supabase (Deno, ~150s timeout) instead of Vercel Hobby
+        // so big free-tier LLM calls don't blow the function deadline.
         setStage(
           mode === "exam"
-            ? "Building exam study sheet…"
-            : "Writing summary…"
+            ? "Building exam study sheet, MCQs & flashcards…"
+            : "Generating summary, MCQs & flashcards…"
         );
-        await post("/api/process-summary", { uploadId });
-
-        // 4) /api/process-mcqs — 10 MCQs.
-        setStage("Generating multiple-choice questions…");
-        await post("/api/process-mcqs", { uploadId });
-
-        // 5) /api/process-flashcards — 12 flashcards + mark ready.
-        setStage("Making flashcards…");
-        await post("/api/process-flashcards", { uploadId });
+        const { data: edgeData, error: edgeErr } =
+          await supabase.functions.invoke("process-quiz", {
+            body: { uploadId },
+          });
+        if (edgeErr) {
+          // The body of an Edge error is on .context; surface what we can.
+          const ctx = (edgeErr as any).context;
+          const errBody = ctx ? await ctx.text?.().catch(() => "") : "";
+          throw new Error(
+            edgeErr.message + (errBody ? `: ${errBody.slice(0, 200)}` : "")
+          );
+        }
+        if (edgeData?.error) throw new Error(edgeData.error);
 
         toast.success("Quiz ready!");
         router.push(`/quiz/${uploadId}`);
